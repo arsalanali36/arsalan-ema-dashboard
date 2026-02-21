@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """Chart rendering helpers (mplfinance + lightweight-charts)."""
 
@@ -23,9 +23,13 @@ def make_day_figure(day: str, day_df: pd.DataFrame, interval: int, show_volume: 
 
     # Conditional markers only when at least one value exists.
     if day_df["Buy_Plot"].notna().any():
-        add_plots.append(mpf.make_addplot(day_df["Buy_Plot"], type="scatter", marker="$B$", markersize=180, color="green"))
+        add_plots.append(mpf.make_addplot(day_df["Buy_Plot"], type="scatter", marker="^", markersize=220, color="green"))
     if day_df["Sell_Plot"].notna().any():
-        add_plots.append(mpf.make_addplot(day_df["Sell_Plot"], type="scatter", marker="$S$", markersize=180, color="red"))
+        add_plots.append(mpf.make_addplot(day_df["Sell_Plot"], type="scatter", marker="v", markersize=220, color="red"))
+    if "LongExit_Plot" in day_df.columns and day_df["LongExit_Plot"].notna().any():
+        add_plots.append(mpf.make_addplot(day_df["LongExit_Plot"], type="scatter", marker="v", markersize=190, color="#1b5e20"))
+    if "ShortExit_Plot" in day_df.columns and day_df["ShortExit_Plot"].notna().any():
+        add_plots.append(mpf.make_addplot(day_df["ShortExit_Plot"], type="scatter", marker="^", markersize=190, color="#8e0000"))
     if day_df["GreenHammer_Plot"].notna().any():
         add_plots.append(mpf.make_addplot(day_df["GreenHammer_Plot"], type="scatter", marker="^", markersize=90, color="green"))
     if day_df["RedHammer_Plot"].notna().any():
@@ -53,10 +57,15 @@ def make_day_figure(day: str, day_df: pd.DataFrame, interval: int, show_volume: 
     if hammer_lines:
         plot_kwargs["alines"] = dict(alines=hammer_lines, colors="#000000", linewidths=2.1, alpha=0.9)
 
-    fig, _ = mpf.plot(
+    # Keep extra breathing room before first candle so chart does not start at the edge.
+    left_pad = pd.Timedelta(minutes=max(3, int(interval) * 4))
+    right_pad = pd.Timedelta(minutes=max(2, int(interval) * 2))
+
+    fig, axes = mpf.plot(
         day_df,
         type="candle",
         style="yahoo",
+        show_nontrading=True,
         volume=show_volume,
         title=f"{day} | EMA Crossover | TF: {interval} min",
         addplot=add_plots,
@@ -64,11 +73,41 @@ def make_day_figure(day: str, day_df: pd.DataFrame, interval: int, show_volume: 
         figscale=1.2,
         tight_layout=False,
         xrotation=0,
-        xlim=(day_df.index.min(), day_df.index.max() + pd.Timedelta(minutes=int(interval))),
+        xlim=(day_df.index.min() - left_pad, day_df.index.max() + right_pad),
+        scale_padding={"left": 0.06, "right": 0.03, "top": 0.06, "bottom": 0.12},
         returnfig=True,
         **plot_kwargs,
     )
-    fig.subplots_adjust(left=0.07, right=0.93, top=0.92, bottom=0.12)
+    if "ExitSignal" in day_df.columns and "ExitReason" in day_df.columns and len(axes) > 0:
+        price_ax = axes[0]
+        exit_rows = day_df[day_df["ExitSignal"].isin(["LX", "SX"])]
+        for ts, row in exit_rows.iterrows():
+            reason = str(row.get("ExitReason", "") or "").replace("_LONG", "").replace("_SHORT", "")
+            if not reason:
+                continue
+            if row["ExitSignal"] == "LX":
+                y = float(row["High"]) * 1.006
+                text = f"LX_{reason}"
+                va = "bottom"
+                color = "#1b5e20"
+            else:
+                y = float(row["Low"]) * 0.994
+                text = f"SX_{reason}"
+                va = "top"
+                color = "#8e0000"
+            price_ax.annotate(
+                text,
+                xy=(pd.Timestamp(ts), y),
+                xytext=(0, 0),
+                textcoords="offset points",
+                ha="center",
+                va=va,
+                fontsize=8,
+                color=color,
+                bbox=dict(boxstyle="round,pad=0.2", fc="#fff7b2", ec="none", alpha=0.85),
+                zorder=6,
+            )
+    fig.subplots_adjust(left=0.10, right=0.93, top=0.92, bottom=0.14)
     return fig
 
 
@@ -85,15 +124,23 @@ def build_lwc_payload(day_df: pd.DataFrame):
         volume_data.append({"time": ts, "value": float(row["Volume"]), "color": "rgba(38,166,154,0.45)" if is_up else "rgba(239,83,80,0.45)"})
 
         if bool(row.get("GreenHammer", False)):
-            markers.append({"time": ts, "position": "belowBar", "color": "#00a651", "shape": "circle", "text": "🔨"})
+            markers.append({"time": ts, "position": "belowBar", "color": "#00a651", "shape": "circle", "text": ""})
         if bool(row.get("RedHammer", False)):
-            markers.append({"time": ts, "position": "belowBar", "color": "#d32f2f", "shape": "circle", "text": "🔨"})
+            markers.append({"time": ts, "position": "belowBar", "color": "#d32f2f", "shape": "circle", "text": ""})
         if bool(row.get("InvertedRedHammer", False)):
-            markers.append({"time": ts, "position": "aboveBar", "color": "#7f1e1e", "shape": "arrowDown", "text": "🔨ᶦ"})
+            markers.append({"time": ts, "position": "aboveBar", "color": "#7f1e1e", "shape": "arrowDown", "text": ""})
         if row["Signal"] == "B":
-            markers.append({"time": ts, "position": "belowBar", "color": "#2e7d32", "shape": "arrowUp", "text": "B"})
+            markers.append({"time": ts, "position": "belowBar", "color": "#2e7d32", "shape": "arrowUp", "text": "B", "size": 2})
         elif row["Signal"] == "S":
-            markers.append({"time": ts, "position": "aboveBar", "color": "#c62828", "shape": "arrowDown", "text": "S"})
+            markers.append({"time": ts, "position": "aboveBar", "color": "#c62828", "shape": "arrowDown", "text": "S", "size": 2})
+        if row.get("ExitSignal", "") == "LX":
+            reason = str(row.get("ExitReason", "") or "").replace("_LONG", "")
+            txt = f"LX_{reason}" if reason else "LX"
+            markers.append({"time": ts, "position": "aboveBar", "color": "#1b5e20", "shape": "arrowDown", "text": txt, "size": 2})
+        elif row.get("ExitSignal", "") == "SX":
+            reason = str(row.get("ExitReason", "") or "").replace("_SHORT", "")
+            txt = f"SX_{reason}" if reason else "SX"
+            markers.append({"time": ts, "position": "belowBar", "color": "#8e0000", "shape": "arrowUp", "text": txt, "size": 2})
 
     return candle_data, ema10_data, ema20_data, dema_data, volume_data, markers
 

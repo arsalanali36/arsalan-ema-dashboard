@@ -15,6 +15,8 @@ import requests
 
 from .config import DHAN_INTRADAY_URL, REQUIRED_KEYS
 
+MARKET_OPEN_TIME = time(9, 15)
+
 
 def fetch_dhan_data(
     access_token: str,
@@ -26,8 +28,10 @@ def fetch_dhan_data(
     to_time_val: time,
 ) -> tuple[dict | None, str | None]:
     """Fetch intraday candles from Dhan API for the selected date-time window."""
-    from_date = datetime.combine(from_date_val, from_time_val).strftime("%Y-%m-%d %H:%M:%S")
-    to_date = datetime.combine(to_date_val, to_time_val).strftime("%Y-%m-%d %H:%M:%S")
+    # Request full selected dates and apply intraday time filter locally.
+    # This avoids API boundary quirks where the first session candle can be skipped.
+    from_date = datetime.combine(from_date_val, time(0, 0)).strftime("%Y-%m-%d %H:%M:%S")
+    to_date = datetime.combine(to_date_val, time(23, 59, 59)).strftime("%Y-%m-%d %H:%M:%S")
 
     # Dhan does not provide native 3-min interval for this endpoint.
     api_interval = 1 if interval == 3 else interval
@@ -72,8 +76,38 @@ def build_intraday_df(data: dict, interval: int, from_time_val: time, to_time_va
     if df.empty:
         return df
 
+    # Normalize to minute boundary (some feeds emit :59 second close labels).
+    df["Date"] = df["Date"].dt.floor("min")
     df.set_index("Date", inplace=True)
     df.sort_index(inplace=True)
+    if df.index.has_duplicates:
+        # Keep one canonical OHLCV row per minute if duplicate timestamps appear.
+        df = df.groupby(level=0).agg(
+            {
+                "Open": "first",
+                "High": "max",
+                "Low": "min",
+                "Close": "last",
+                "Volume": "sum",
+            }
+        )
+
+    def align_day_start_labels(frame: pd.DataFrame, step_minutes: int) -> pd.DataFrame:
+        """Align each day's first candle label to market open when feed is close-time labelled."""
+        adjusted_days = []
+        max_shift = pd.Timedelta(minutes=max(1, int(step_minutes)))
+        for day, day_df in frame.groupby(frame.index.date):
+            session_start = pd.Timestamp.combine(pd.Timestamp(day).date(), MARKET_OPEN_TIME)
+            first_ts = day_df.index.min()
+            delta = first_ts - session_start
+            if pd.Timedelta(0) < delta <= max_shift:
+                day_df = day_df.copy()
+                day_df.index = day_df.index - delta
+            adjusted_days.append(day_df)
+        return pd.concat(adjusted_days).sort_index() if adjusted_days else frame
+
+    # Fix 1-minute close-time labels (e.g., first bar appears at 09:16).
+    df = align_day_start_labels(df, step_minutes=1)
 
     if interval == 3:
         # Build 3-min candles from 1-min candles.
@@ -86,5 +120,8 @@ def build_intraday_df(data: dict, interval: int, from_time_val: time, to_time_va
                 "Volume": "sum",
             }
         ).dropna(subset=["Open", "High", "Low", "Close"])
+    elif interval > 1:
+        # Fix native multi-minute close-time labels (e.g., first 5m bar at 09:20).
+        df = align_day_start_labels(df, step_minutes=interval)
 
     return df.between_time(from_time_val.strftime("%H:%M"), to_time_val.strftime("%H:%M"))

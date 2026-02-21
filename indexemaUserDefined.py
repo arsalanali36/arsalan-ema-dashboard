@@ -17,6 +17,7 @@ import streamlit as st
 from matplotlib.backends.backend_pdf import PdfPages
 
 from ema_dashboard import (
+    _default_strategy_settings,
     ACCESS_TOKEN,
     MIN_BODY_SIZE,
     PREV_BODY_MIN_PTS,
@@ -38,6 +39,7 @@ st.title("Dhan EMA Crossover Dashboard")
 
 # ---------- Session state bootstrap ----------
 def init_state():
+    strategy_defaults = _default_strategy_settings()
     defaults = {
         "security_id": "13",
         "from_date_val": pd.to_datetime("2026-02-17").date(),
@@ -64,6 +66,18 @@ def init_state():
         "bt_fast_ema": 10,
         "bt_slow_ema": 20,
         "graph_selected_trade_id": None,
+        "strategy_id": strategy_defaults["strategy_id"],
+        "str1_continuation_enabled": strategy_defaults["enabled"],
+        "use_fresh_zone_only": strategy_defaults["use_fresh_zone_only"],
+        "exit_fib_enabled": strategy_defaults["exit_fib_enabled"],
+        "exit_zone_enabled": strategy_defaults["exit_zone_enabled"],
+        "exit_atr_enabled": strategy_defaults["exit_atr_enabled"],
+        "skip_big_candle": strategy_defaults["skip_big_candle"],
+        "max_zone_age": strategy_defaults["max_zone_age"],
+        "max_zone_distance": strategy_defaults["max_zone_distance"],
+        "max_candle_size": strategy_defaults["max_candle_size"],
+        "atr_len": strategy_defaults["atr_len"],
+        "atr_mult": strategy_defaults["atr_mult"],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -125,15 +139,43 @@ def fetch_and_prepare():
         st.error("No data available in selected time window.")
         return
 
+    first_times = ", ".join(ts.strftime("%H:%M") for ts in df.index[:5])
+    day_firsts = []
+    for day, day_df in df.groupby(df.index.date):
+        if not day_df.empty:
+            day_firsts.append(f"{day}: {day_df.index.min().strftime('%H:%M')}")
+    day_firsts_text = "; ".join(day_firsts)
     st.session_state["range_caption"] = (
         f"Fetched candles: {len(df)} | Range: {df.index.min()} to {df.index.max()} (Asia/Kolkata)"
+        f" | First candles: {first_times} | Day starts: {day_firsts_text}"
     )
+
+    strategy_settings = {
+        "strategy_id": st.session_state["strategy_id"],
+        "enabled": bool(st.session_state["str1_continuation_enabled"]),
+        "use_fresh_zone_only": bool(st.session_state["use_fresh_zone_only"]),
+        "exit_fib_enabled": bool(st.session_state["exit_fib_enabled"]),
+        "exit_zone_enabled": bool(st.session_state["exit_zone_enabled"]),
+        "exit_atr_enabled": bool(st.session_state["exit_atr_enabled"]),
+        "skip_big_candle": bool(st.session_state["skip_big_candle"]),
+        "max_zone_age": int(st.session_state["max_zone_age"]),
+        "max_zone_distance": float(st.session_state["max_zone_distance"]),
+        "max_candle_size": float(st.session_state["max_candle_size"]),
+        "atr_len": int(st.session_state["atr_len"]),
+        "atr_mult": float(st.session_state["atr_mult"]),
+    }
 
     day_results = []
     for day, day_df in df.groupby(df.index.date):
         if day_df.empty:
             continue
-        ready_day_df = prepare_day_df(day_df, MIN_BODY_SIZE, WICK_RATIO, PREV_BODY_MIN_PTS)
+        ready_day_df = prepare_day_df(
+            day_df,
+            MIN_BODY_SIZE,
+            WICK_RATIO,
+            PREV_BODY_MIN_PTS,
+            strategy_settings=strategy_settings,
+        )
         day_results.append({"day": str(day), "df": ready_day_df})
 
     if not day_results:
@@ -173,38 +215,47 @@ def apply_scan_best_pair():
 
 init_state()
 
-# ---------- Top-level page router ----------
-page = st.radio(
-    "Select Page",
-    ["Data & Settings", "Charts", "Backtest"],
-    horizontal=True,
-)
-
-if page == "Data & Settings":
-    # ---------- Page 1: data inputs + fetch ----------
+with st.sidebar:
     st.subheader("Data & Settings")
-    c1, c2, c3 = st.columns(3)
-    c1.text_input("Security ID (Index)", key="security_id")
-    c2.time_input("Entry Time", key="from_time_val")
-    c3.time_input("Exit Time", key="to_time_val")
-
-    c4, c5, c6 = st.columns(3)
-    c4.selectbox("Interval (Minutes)", [1, 3, 5, 15, 25, 60], key="interval")
-    c5.number_input("Price to Bar", min_value=0.5, max_value=10.0, step=0.1, key="price_bar_ratio")
-    c6.checkbox("Use Lightweight Charts", key="use_lightweight")
-
-    c7, c8 = st.columns(2)
-    c7.date_input("From Date", key="from_date_val")
-    c8.date_input("To Date", key="to_date_val")
+    st.selectbox("Strategy", options=["continuation_v1"], key="strategy_id", help="Future me yahan multiple strategies add hongi.")
+    st.text_input("Security ID (Index)", key="security_id")
+    st.time_input("Entry Time", key="from_time_val")
+    st.time_input("Exit Time", key="to_time_val")
+    st.selectbox("Interval (Minutes)", [1, 3, 5, 15, 25, 60], key="interval")
+    st.number_input("Price to Bar", min_value=0.5, max_value=10.0, step=0.1, key="price_bar_ratio")
+    st.checkbox("Use Lightweight Charts", key="use_lightweight")
+    st.date_input("From Date", key="from_date_val")
+    st.date_input("To Date", key="to_date_val")
     st.checkbox("Show Volume Panel", key="show_volume")
+    with st.expander("STR1 - Continuation", expanded=True):
+        st.checkbox("Enable STR1 - Continuation", key="str1_continuation_enabled")
+        st.markdown("`Entry`")
+        st.checkbox("Use Fresh Zone Only", key="use_fresh_zone_only")
+        st.checkbox("Skip Big Candle", key="skip_big_candle")
+        st.number_input("Zone Fresh Age", min_value=1, max_value=20, step=1, key="max_zone_age")
+        st.number_input("Max Zone Distance", min_value=1.0, max_value=500.0, step=1.0, key="max_zone_distance")
+        st.number_input("Max Candle Size", min_value=1.0, max_value=500.0, step=1.0, key="max_candle_size")
+        st.markdown("`Exit`")
+        st.checkbox("Fib Exit", key="exit_fib_enabled")
+        st.checkbox("Zone Exit", key="exit_zone_enabled")
+        st.checkbox("AtrExit", key="exit_atr_enabled")
+        st.number_input("ATR Length", min_value=1, max_value=100, step=1, key="atr_len")
+        st.number_input("ATR Mult", min_value=0.5, max_value=10.0, step=0.1, key="atr_mult")
 
-    if st.button("Fetch Data"):
+    if st.button("Fetch Data", use_container_width=True):
         fetch_and_prepare()
 
     if st.session_state["range_caption"]:
         st.caption(st.session_state["range_caption"])
 
-elif page == "Charts":
+# ---------- Top-level page router ----------
+page = st.radio(
+    "Select Page",
+    ["Charts", "Backtest"],
+    horizontal=True,
+)
+
+if page == "Charts":
     # ---------- Page 2: chart rendering + download ----------
     st.subheader("Charts")
 
@@ -212,7 +263,7 @@ elif page == "Charts":
         st.warning("lightweight-charts not installed. Run: `python -m pip install streamlit-lightweight-charts`")
 
     if not st.session_state["day_results"]:
-        st.info("Pehle Data & Settings page me jaake data fetch karein.")
+        st.info("Upar Data & Settings panel se data fetch karein.")
     else:
         if st.session_state["range_caption"]:
             st.caption(st.session_state["range_caption"])
@@ -297,7 +348,7 @@ elif page == "Backtest":
     st.subheader("Backtest (EMA Cross + EMA20 Exit)")
 
     if st.session_state["final_df"] is None or st.session_state["final_df"].empty:
-        st.info("Pehle Data & Settings page me jaake data fetch karein.")
+        st.info("Upar Data & Settings panel se data fetch karein.")
     else:
         st.markdown("### EMA Variation Scan")
         # Grid-scan candidate fast/slow EMA combinations.

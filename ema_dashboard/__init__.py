@@ -20,7 +20,7 @@ from .exporters import build_tv_style_html_document
 from .backtest import EmaCrossWithEma20Exit, run_ema20_exit_backtest, run_ema_variation_backtests
 
 # Pattern and indicator preparation.
-from .patterns import prepare_day_df
+from .patterns import _default_strategy_settings, prepare_day_df
 
 __all__ = [
     "ACCESS_TOKEN",
@@ -32,6 +32,7 @@ __all__ = [
     "validate_response",
     "build_intraday_df",
     "prepare_day_df",
+    "_default_strategy_settings",
     "EmaCrossWithEma20Exit",
     "run_ema20_exit_backtest",
     "run_ema_variation_backtests",
