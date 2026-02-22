@@ -4,6 +4,15 @@ This app fetches intraday index candles from Dhan, builds day-wise charts, and r
 
 ## Recent Changes
 
+### 0) Journal + Trade Management (Auto from Dhan)
+- Added **Journal** page with auto-build from Dhan Trade History.
+- Range, Daily, and Lifetime dashboards (tabs).
+- Metrics + charts for points, net P/L, fixed costs, buy/sell averages, durations.
+- Tagging (`STR Entry`) with persistent dropdown options and saved tags.
+- Trade notes + multi-image uploads per trade; persisted to disk.
+- Daily image gallery with click-to-open viewer and prev/next navigation.
+- Import/Export tags and tag options; all data stored locally for session persistence.
+
 ### 1) Candle time alignment fixes
 - Fixed first-candle alignment to market open (`09:15`) across 1m/3m/5m style views.
 - Added robust per-day timestamp handling and minute normalization in `ema_dashboard/data.py`.
@@ -44,3 +53,8 @@ This app fetches intraday index candles from Dhan, builds day-wise charts, and r
 - `ema_dashboard/patterns.py`
 - `ema_dashboard/__init__.py`
 
+## Local Persistent Data
+- `journal_notes.json` (trade notes + image metadata)
+- `journal_media/` (uploaded images)
+- `journal_tags.csv` (saved STR Entry tags)
+- `journal_tag_options.json` (custom tag options)

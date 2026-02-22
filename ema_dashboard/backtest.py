@@ -2,9 +2,12 @@ from __future__ import annotations
 
 """Backtesting utilities for EMA crossover strategy variants."""
 
+import numpy as np
 import pandas as pd
 from backtesting import Backtest, Strategy
 from backtesting.lib import crossover
+
+from .patterns import prepare_day_df
 
 
 def _ema(values, period: int):
@@ -150,6 +153,235 @@ def run_ema_variation_backtests(
 
     if not rows:
         raise ValueError("No valid EMA pair generated. Keep fast EMA smaller than slow EMA.")
+
+    result = pd.DataFrame(rows)
+    result = result.sort_values(by=["Score", "Return [%]", "Sharpe Ratio"], ascending=[False, False, False]).reset_index(drop=True)
+    result.insert(0, "Rank", range(1, len(result) + 1))
+    return result
+
+
+def _max_drawdown_pct(equity: pd.Series) -> float:
+    if equity.empty:
+        return 0.0
+    running_max = equity.cummax()
+    dd = (equity - running_max) / running_max.replace(0, np.nan)
+    return float(dd.min() * 100.0) if not dd.empty else 0.0
+
+
+def _sharpe_from_equity(equity: pd.Series) -> float:
+    if equity is None or len(equity) < 3:
+        return 0.0
+    rets = equity.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    if rets.empty:
+        return 0.0
+    std = float(rets.std())
+    if std <= 1e-12:
+        return 0.0
+    return float((rets.mean() / std) * np.sqrt(len(rets)))
+
+
+def _prepare_str1_df(
+    df: pd.DataFrame,
+    min_body_size: float,
+    wick_ratio: float,
+    prev_body_min_pts: float,
+    strategy_settings: dict,
+) -> pd.DataFrame:
+    day_results = []
+    for _, day_df in df.groupby(df.index.date):
+        if day_df.empty:
+            continue
+        day_results.append(
+            prepare_day_df(
+                day_df,
+                min_body_size=min_body_size,
+                wick_ratio=wick_ratio,
+                prev_body_min_pts=prev_body_min_pts,
+                strategy_settings=strategy_settings,
+            )
+        )
+    if not day_results:
+        return pd.DataFrame()
+    return pd.concat(day_results).sort_index()
+
+
+def run_str1_signal_backtest(
+    df: pd.DataFrame,
+    cash: float = 100000,
+    commission: float = 0.0005,
+) -> tuple[None, pd.Series]:
+    """Run backtest from precomputed STR1 Signal/ExitSignal columns."""
+    required = {"Open", "High", "Low", "Close", "Signal", "ExitSignal"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"Missing required STR1 columns: {sorted(missing)}")
+
+    data = df.copy().sort_index()
+    entry_time = None
+    entry_price = np.nan
+    side = 0
+    trade_id = 0
+    realized_pnl = 0.0
+    trades: list[dict] = []
+    equity_rows: list[dict] = []
+
+    for ts, row in data.iterrows():
+        close = float(row["Close"])
+        signal = str(row.get("Signal", "") or "")
+        exit_signal = str(row.get("ExitSignal", "") or "")
+        exit_reason = str(row.get("ExitReason", "") or "")
+
+        if side == 0:
+            if signal == "B":
+                side = 1
+                entry_time = ts
+                entry_price = close
+                realized_pnl -= abs(entry_price) * commission
+            elif signal == "S":
+                side = -1
+                entry_time = ts
+                entry_price = close
+                realized_pnl -= abs(entry_price) * commission
+        else:
+            should_exit = (side == 1 and exit_signal == "LX") or (side == -1 and exit_signal == "SX")
+            if should_exit:
+                trade_id += 1
+                pnl = (close - entry_price) * side
+                pnl -= abs(close) * commission
+                realized_pnl += pnl
+                trades.append(
+                    {
+                        "TradeID": trade_id,
+                        "EntryTime": entry_time,
+                        "ExitTime": ts,
+                        "EntryPrice": float(entry_price),
+                        "ExitPrice": close,
+                        "Size": float(side),
+                        "PnL [$]": float(round(pnl, 4)),
+                        "Return [%]": float(round(((close / entry_price) - 1.0) * 100.0 * side, 4)),
+                        "Tag": exit_reason if exit_reason else ("LX" if side == 1 else "SX"),
+                    }
+                )
+                side = 0
+                entry_time = None
+                entry_price = np.nan
+
+        unrealized = 0.0 if side == 0 else (close - float(entry_price)) * float(side)
+        equity_rows.append({"Time": ts, "Equity": float(cash + realized_pnl + unrealized)})
+
+    if side != 0 and entry_time is not None:
+        ts = data.index[-1]
+        close = float(data["Close"].iloc[-1])
+        trade_id += 1
+        pnl = (close - entry_price) * side
+        pnl -= abs(close) * commission
+        realized_pnl += pnl
+        trades.append(
+            {
+                "TradeID": trade_id,
+                "EntryTime": entry_time,
+                "ExitTime": ts,
+                "EntryPrice": float(entry_price),
+                "ExitPrice": close,
+                "Size": float(side),
+                "PnL [$]": float(round(pnl, 4)),
+                "Return [%]": float(round(((close / entry_price) - 1.0) * 100.0 * side, 4)),
+                "Tag": "EOD",
+            }
+        )
+        equity_rows[-1]["Equity"] = float(cash + realized_pnl)
+
+    trades_df = pd.DataFrame(trades)
+    if trades_df.empty:
+        trades_df = pd.DataFrame(columns=["TradeID", "EntryTime", "ExitTime", "EntryPrice", "ExitPrice", "Size", "PnL [$]", "Return [%]", "Tag"])
+    eq_curve = pd.DataFrame(equity_rows).set_index("Time") if equity_rows else pd.DataFrame(columns=["Equity"])
+    equity_final = float(eq_curve["Equity"].iloc[-1]) if not eq_curve.empty else float(cash)
+    total_return = ((equity_final / float(cash)) - 1.0) * 100.0 if cash else 0.0
+    wins = int((trades_df["PnL [$]"] > 0).sum()) if "PnL [$]" in trades_df.columns else 0
+    num_trades = int(len(trades_df))
+    win_rate = (wins / num_trades * 100.0) if num_trades else 0.0
+    max_dd = _max_drawdown_pct(eq_curve["Equity"]) if "Equity" in eq_curve.columns else 0.0
+    sharpe = _sharpe_from_equity(eq_curve["Equity"]) if "Equity" in eq_curve.columns else 0.0
+
+    stats = pd.Series(
+        {
+            "Equity Final [$]": equity_final,
+            "Return [%]": total_return,
+            "# Trades": float(num_trades),
+            "Win Rate [%]": win_rate,
+            "Max. Drawdown [%]": max_dd,
+            "Sharpe Ratio": sharpe,
+            "_strategy": "STR1_Continuation",
+            "_equity_curve": eq_curve,
+            "_trades": trades_df,
+        }
+    )
+    return None, stats
+
+
+def run_str1_variation_backtests(
+    df: pd.DataFrame,
+    min_body_size: float,
+    wick_ratio: float,
+    prev_body_min_pts: float,
+    base_settings: dict,
+    fib_options: list[bool],
+    zone_options: list[bool],
+    atr_options: list[bool],
+    atr_len_values: list[int],
+    atr_mult_values: list[float],
+    cash: float = 100000,
+    commission: float = 0.0005,
+) -> pd.DataFrame:
+    """Grid-scan STR1 exit-criteria combinations."""
+    required = {"Open", "High", "Low", "Close"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"Missing OHLC columns: {sorted(missing)}")
+
+    rows: list[dict] = []
+    fib_unique = [bool(x) for x in fib_options]
+    zone_unique = [bool(x) for x in zone_options]
+    atr_unique = [bool(x) for x in atr_options]
+    atr_len_unique = sorted({int(x) for x in atr_len_values if int(x) > 0}) or [14]
+    atr_mult_unique = sorted({float(x) for x in atr_mult_values if float(x) > 0}) or [2.0]
+
+    for fib_on in fib_unique:
+        for zone_on in zone_unique:
+            for atr_on in atr_unique:
+                len_grid = atr_len_unique if atr_on else [int(base_settings.get("atr_len", 14))]
+                mult_grid = atr_mult_unique if atr_on else [float(base_settings.get("atr_mult", 2.0))]
+                for atr_len in len_grid:
+                    for atr_mult in mult_grid:
+                        settings = dict(base_settings)
+                        settings["exit_fib_enabled"] = fib_on
+                        settings["exit_zone_enabled"] = zone_on
+                        settings["exit_atr_enabled"] = atr_on
+                        settings["atr_len"] = int(atr_len)
+                        settings["atr_mult"] = float(atr_mult)
+                        prepared = _prepare_str1_df(df, min_body_size, wick_ratio, prev_body_min_pts, settings)
+                        if prepared.empty:
+                            continue
+                        _, stats = run_str1_signal_backtest(prepared, cash=cash, commission=commission)
+                        rows.append(
+                            {
+                                "Fib Exit": int(fib_on),
+                                "Zone Exit": int(zone_on),
+                                "AtrExit": int(atr_on),
+                                "ATR Len": int(atr_len),
+                                "ATR Mult": float(atr_mult),
+                                "Score": _variation_score(stats),
+                                "Return [%]": _safe_number(stats, "Return [%]"),
+                                "Sharpe Ratio": _safe_number(stats, "Sharpe Ratio"),
+                                "Win Rate [%]": _safe_number(stats, "Win Rate [%]"),
+                                "Max. Drawdown [%]": _safe_number(stats, "Max. Drawdown [%]"),
+                                "# Trades": _safe_number(stats, "# Trades"),
+                                "Equity Final [$]": _safe_number(stats, "Equity Final [$]"),
+                            }
+                        )
+
+    if not rows:
+        raise ValueError("No STR1 variation combination generated.")
 
     result = pd.DataFrame(rows)
     result = result.sort_values(by=["Score", "Return [%]", "Sharpe Ratio"], ascending=[False, False, False]).reset_index(drop=True)

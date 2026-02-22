@@ -11,6 +11,7 @@ def _default_strategy_settings() -> dict:
     return {
         "strategy_id": "continuation_v1",
         "enabled": True,
+        "max_trades_per_day": 2,
         "use_fresh_zone_only": True,
         "skip_big_candle": True,
         "max_zone_age": 2,
@@ -130,12 +131,16 @@ def prepare_day_df(
     use_fresh_zone_only = bool(cfg["use_fresh_zone_only"])
     skip_big_candle = bool(cfg["skip_big_candle"])
     strategy_enabled = bool(cfg.get("enabled", True))
+    max_trades_per_day = max(1, int(cfg.get("max_trades_per_day", 2)))
     max_zone_age = int(cfg["max_zone_age"])
     max_zone_distance = float(cfg["max_zone_distance"])
     max_candle_size = float(cfg["max_candle_size"])
     exit_fib_enabled = bool(cfg["exit_fib_enabled"])
     exit_zone_enabled = bool(cfg["exit_zone_enabled"])
     exit_atr_enabled = bool(cfg["exit_atr_enabled"])
+    if not (exit_fib_enabled or exit_zone_enabled or exit_atr_enabled):
+        # Safety: prevent never-ending positions when all exit toggles are disabled.
+        exit_zone_enabled = True
     atr_len = max(1, int(cfg["atr_len"]))
     atr_mult = float(cfg["atr_mult"])
 
@@ -157,6 +162,7 @@ def prepare_day_df(
     zone_lower = np.nan
     position_state = 0  # 0=flat, 1=long, -1=short
     entry_bar_index = -1
+    trades_today = 0
 
     opens = day_df["Open"].to_numpy()
     highs = day_df["High"].to_numpy()
@@ -250,7 +256,8 @@ def prepare_day_df(
             and is_red_candle
         )
 
-        if index_long_signal:
+        entry_allowed = trades_today < max_trades_per_day
+        if index_long_signal and entry_allowed:
             if position_state == 0:
                 signal_values[i] = "B"
                 position_state = 1
@@ -259,7 +266,8 @@ def prepare_day_df(
                 atr_sl_short = np.nan
                 entry_fib0 = running_day_high
                 entry_fib100 = running_day_low
-        elif index_short_signal:
+                trades_today += 1
+        elif index_short_signal and entry_allowed:
             if position_state == 0:
                 signal_values[i] = "S"
                 position_state = -1
@@ -268,6 +276,7 @@ def prepare_day_df(
                 atr_sl_long = np.nan
                 entry_fib0 = running_day_high
                 entry_fib100 = running_day_low
+                trades_today += 1
 
         long_exit_gate = red_zone_fresh if use_fresh_zone_only else red_zone_touch_and_candle
         short_exit_gate = green_zone_fresh if use_fresh_zone_only else green_zone_touch_and_candle
@@ -334,6 +343,26 @@ def prepare_day_df(
         elif position_state == -1 and i > entry_bar_index and strategy_enabled and exit_zone_enabled and index_short_exit_condition:
             exit_signal_values[i] = "SX"
             exit_reason_values[i] = "ZONE_SHORT"
+            position_state = 0
+            entry_bar_index = -1
+            atr_sl_long = np.nan
+            atr_sl_short = np.nan
+            entry_fib0 = np.nan
+            entry_fib100 = np.nan
+        elif position_state == 1 and i > entry_bar_index and index_short_signal:
+            # Fallback: reverse signal closes current long if no configured exit has fired.
+            exit_signal_values[i] = "LX"
+            exit_reason_values[i] = "REV_LONG"
+            position_state = 0
+            entry_bar_index = -1
+            atr_sl_long = np.nan
+            atr_sl_short = np.nan
+            entry_fib0 = np.nan
+            entry_fib100 = np.nan
+        elif position_state == -1 and i > entry_bar_index and index_long_signal:
+            # Fallback: reverse signal closes current short if no configured exit has fired.
+            exit_signal_values[i] = "SX"
+            exit_reason_values[i] = "REV_SHORT"
             position_state = 0
             entry_bar_index = -1
             atr_sl_long = np.nan

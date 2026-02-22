@@ -9,10 +9,13 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import tempfile
 import os
+from dotenv import load_dotenv
 
 # ---------------- CONFIG ----------------
 BASE_URL = "https://api.dhan.co/v2/charts/rollingoption"
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcxNzMzNzUxLCJpYXQiOjE3NzE2NDczNTEsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAxMzEwOTc2In0.bH0tAmQ6i5ovAscFvbX2r9yakvOaD0mdvPY_0Fk-Tdkc87QoHcb_UdlTiH65tt6bhcw6fLSh43kkoMATHrJVvw"
+
+load_dotenv()
+ACCESS_TOKEN = os.getenv("DHAN_TOKEN", "<PASTE_DHAN_TOKEN_HERE>")
 
 headers = {
     "Content-Type": "application/json",
@@ -27,6 +30,9 @@ to_date = st.date_input("To Date")
 interval = st.selectbox("Time Interval (minutes)", ["1", "5", "15", "25", "60"])
 
 if st.button("Load Charts"):
+    if "<PASTE_DHAN_TOKEN_HERE>" in ACCESS_TOKEN:
+        st.error("Please set DHAN_TOKEN in .env or your environment.")
+        st.stop()
 
     # API request payload based on selected UI values.
     body = {
@@ -81,7 +87,7 @@ if st.button("Load Charts"):
             if len(day_df) == 0:
                 continue
 
-            # 🔥 IMPROVED CHART SETTINGS (Only change)
+            # IMPROVED CHART SETTINGS (Only change)
             # Chart settings tuned for readability (larger figure and candles).
             fig, axlist = mpf.plot(
                 day_df,
