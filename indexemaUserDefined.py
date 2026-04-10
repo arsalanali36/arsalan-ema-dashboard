@@ -51,6 +51,81 @@ st.set_page_config(page_title="Dhan EMA Crossover Dashboard", layout="wide")
 st.title("Dhan EMA Crossover Dashboard")
 
 
+# ---------- App shell / base layout ----------
+def render_base_layout_shell():
+    st.markdown(
+        """
+        <style>
+        .base-hero {
+            background: linear-gradient(125deg, #0f172a 0%, #1e293b 52%, #0ea5e9 100%);
+            border-radius: 16px;
+            padding: 20px 22px;
+            color: #f8fafc;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            margin-bottom: 0.9rem;
+        }
+        .base-hero h2 {
+            margin: 0 0 0.25rem 0;
+            font-size: 1.5rem;
+            letter-spacing: 0.2px;
+        }
+        .base-hero p {
+            margin: 0;
+            color: #e2e8f0;
+            font-size: 0.94rem;
+        }
+        .base-card {
+            border: 1px solid #dbe3ea;
+            border-radius: 14px;
+            background: #f8fafc;
+            padding: 12px 14px;
+            min-height: 94px;
+        }
+        .base-label {
+            margin: 0;
+            font-size: 0.78rem;
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .base-value {
+            margin: 0.45rem 0 0 0;
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #0f172a;
+        }
+        .base-note {
+            margin-top: 0.35rem;
+            color: #64748b;
+            font-size: 0.82rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _metric_card(label: str, value: str, note: str = ""):
+    note_html = f"<p class='base-note'>{note}</p>" if note else ""
+    st.markdown(
+        f"""
+        <div class="base-card">
+            <p class="base-label">{label}</p>
+            <p class="base-value">{value}</p>
+            {note_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _get_trade_count() -> int:
+    trades = st.session_state.get("backtest_trades")
+    if isinstance(trades, pd.DataFrame):
+        return int(len(trades))
+    return 0
+
+
 # ---------- Session state bootstrap ----------
 def init_state():
     strategy_defaults = _default_strategy_settings()
@@ -291,13 +366,87 @@ with st.sidebar:
 # ---------- Top-level page router ----------
 page = st.radio(
     "Select Page",
-    ["Charts", "Backtest", "Live Data", "Dhan Trades", "Journal"],
+    ["Home", "Charts", "Backtest", "Live Data", "Dhan Trades", "Journal"],
     horizontal=True,
 )
 
-if page == "Charts":
+if page == "Home":
+    render_base_layout_shell()
+    st.markdown(
+        """
+        <div class="base-hero">
+            <h2>Khazana Trading Workspace</h2>
+            <p>Single base layout for data fetch, charting, backtesting, live monitoring, and journal workflows.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    final_df = st.session_state.get("final_df")
+    days_loaded = int(len(st.session_state.get("day_results", [])))
+    candles_loaded = int(len(final_df)) if isinstance(final_df, pd.DataFrame) else 0
+    trades_count = _get_trade_count()
+    download_ready = "Yes" if st.session_state.get("download_ready") else "No"
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        _metric_card("Data Status", "Loaded" if candles_loaded > 0 else "Not Loaded", "Use sidebar > Fetch Data")
+    with m2:
+        _metric_card("Days Loaded", str(days_loaded), f"Candles: {candles_loaded}")
+    with m3:
+        _metric_card("Backtest Trades", str(trades_count), "From last backtest run")
+    with m4:
+        _metric_card("Download Ready", download_ready, st.session_state.get("download_mode", ""))
+
+    st.markdown("### Base Navigation")
+    st.info(
+        "Flow: 1) Sidebar me token/settings set karein  2) Fetch Data  3) Charts/Backtest use karein  4) Live Data aur Dhan Trades monitor karein  5) Journal me notes/tags maintain karein."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        with st.container(border=True):
+            st.markdown("#### Charts")
+            st.caption("Day-wise chart render + download artifact.")
+    with c2:
+        with st.container(border=True):
+            st.markdown("#### Backtest")
+            st.caption("EMA pair scan, strategy metrics, trade table and graph.")
+    with c3:
+        with st.container(border=True):
+            st.markdown("#### Journal")
+            st.caption("Auto-sync trades, tag entries, maintain media-backed notes.")
+
+elif page == "Charts":
     # ---------- Page 2: chart rendering + download ----------
     st.subheader("Charts")
+    st.markdown(
+        """
+        <style>
+        .charts-note {
+            color: #5b6472;
+            font-size: 0.92rem;
+            margin-bottom: 0.35rem;
+        }
+        .charts-header {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 0.85rem;
+        }
+        .charts-kpi {
+            font-size: 0.86rem;
+            color: #5b6472;
+            margin: 0;
+        }
+        .charts-kpi b {
+            color: #111827;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if st.session_state["use_lightweight"] and not HAS_LWC:
         st.warning("lightweight-charts not installed. Run: `python -m pip install streamlit-lightweight-charts`")
@@ -305,83 +454,120 @@ if page == "Charts":
     if not st.session_state["day_results"]:
         st.info("Upar Data & Settings panel se data fetch karein.")
     else:
+        total_days = int(len(st.session_state["day_results"]))
+        total_rows = int(len(st.session_state["final_df"])) if st.session_state["final_df"] is not None else 0
+        mode_text = "Lightweight HTML" if st.session_state["use_lightweight"] and HAS_LWC else "PDF (mplfinance)"
+
+        st.markdown("<div class='charts-header'>", unsafe_allow_html=True)
+        kc1, kc2, kc3 = st.columns(3)
+        kc1.markdown(
+            f"<p class='charts-kpi'>Days Loaded: <b>{total_days}</b></p>",
+            unsafe_allow_html=True,
+        )
+        kc2.markdown(
+            f"<p class='charts-kpi'>Total Candles: <b>{total_rows}</b></p>",
+            unsafe_allow_html=True,
+        )
+        kc3.markdown(
+            f"<p class='charts-kpi'>Download Mode: <b>{mode_text}</b></p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
         if st.session_state["range_caption"]:
-            st.caption(st.session_state["range_caption"])
-
-        if not st.session_state["download_ready"]:
-            if st.button(f"Prepare Download ({st.session_state['pages_added']} pages)"):
-                if st.session_state["use_lightweight"] and HAS_LWC:
-                    height_px = int(max(360, min(760, 500 + (float(st.session_state["price_bar_ratio"]) - 3.0) * 25)))
-                    html_doc = build_tv_style_html_document(st.session_state["day_results"], int(st.session_state["interval"]), height_px)
-                    st.session_state["download_bytes"] = html_doc.encode("utf-8")
-                    st.session_state["download_mode"] = "lightweight-html"
-                    st.session_state["download_name"] = "ema_multi_day_tv_style.html"
-                    st.session_state["download_mime"] = "text/html"
-                    st.session_state["download_ready"] = True
-                    st.rerun()
-
-                if not st.session_state["download_ready"]:
-                    pdf_buffer = io.BytesIO()
-                    with PdfPages(pdf_buffer) as pdf:
-                        for day_entry in st.session_state["day_results"]:
-                            fig = make_day_figure(
-                                day_entry["day"],
-                                day_entry["df"],
-                                int(st.session_state["interval"]),
-                                bool(st.session_state["show_volume"]),
-                                float(st.session_state["price_bar_ratio"]),
-                            )
-                            pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
-                    st.session_state["download_bytes"] = pdf_buffer.getvalue()
-                    st.session_state["download_mode"] = "mplfinance"
-                    st.session_state["download_name"] = "ema_multi_day_charts.pdf"
-                    st.session_state["download_mime"] = "application/pdf"
-                    st.session_state["download_ready"] = True
-                    st.rerun()
-        else:
-            st.download_button(
-                label=f"Download File ({st.session_state['pages_added']} pages)",
-                data=st.session_state["download_bytes"],
-                file_name=st.session_state["download_name"],
-                mime=st.session_state["download_mime"],
+            st.markdown(
+                f"<div class='charts-note'>{st.session_state['range_caption']}</div>",
+                unsafe_allow_html=True,
             )
+
+        action_col, help_col = st.columns([1, 2])
+        with action_col:
+            if not st.session_state["download_ready"]:
+                if st.button(
+                    f"Prepare Download ({st.session_state['pages_added']} pages)",
+                    key="charts_prepare_download_btn",
+                    use_container_width=True,
+                ):
+                    if st.session_state["use_lightweight"] and HAS_LWC:
+                        height_px = int(max(360, min(760, 500 + (float(st.session_state["price_bar_ratio"]) - 3.0) * 25)))
+                        html_doc = build_tv_style_html_document(st.session_state["day_results"], int(st.session_state["interval"]), height_px)
+                        st.session_state["download_bytes"] = html_doc.encode("utf-8")
+                        st.session_state["download_mode"] = "lightweight-html"
+                        st.session_state["download_name"] = "ema_multi_day_tv_style.html"
+                        st.session_state["download_mime"] = "text/html"
+                        st.session_state["download_ready"] = True
+                        st.rerun()
+
+                    if not st.session_state["download_ready"]:
+                        pdf_buffer = io.BytesIO()
+                        with PdfPages(pdf_buffer) as pdf:
+                            for day_entry in st.session_state["day_results"]:
+                                fig = make_day_figure(
+                                    day_entry["day"],
+                                    day_entry["df"],
+                                    int(st.session_state["interval"]),
+                                    bool(st.session_state["show_volume"]),
+                                    float(st.session_state["price_bar_ratio"]),
+                                )
+                                pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
+                        st.session_state["download_bytes"] = pdf_buffer.getvalue()
+                        st.session_state["download_mode"] = "mplfinance"
+                        st.session_state["download_name"] = "ema_multi_day_charts.pdf"
+                        st.session_state["download_mime"] = "application/pdf"
+                        st.session_state["download_ready"] = True
+                        st.rerun()
+            else:
+                st.download_button(
+                    label=f"Download File ({st.session_state['pages_added']} pages)",
+                    data=st.session_state["download_bytes"],
+                    file_name=st.session_state["download_name"],
+                    mime=st.session_state["download_mime"],
+                    use_container_width=True,
+                )
+        with help_col:
+            st.info("Tip: Sidebar settings (interval, volume panel, price-to-bar ratio) chart readability ko directly impact karte hain.")
 
         for i, day_entry in enumerate(st.session_state["day_results"]):
             day = day_entry["day"]
             day_df = day_entry["df"]
-            st.caption(
-                f"{day} -> GH: {int(day_df['GreenHammer'].sum())}, "
-                f"RH: {int(day_df['RedHammer'].sum())}, "
-                f"IRH: {int(day_df['InvertedRedHammer'].sum())}"
-            )
+            with st.container(border=True):
+                hc1, hc2 = st.columns([2, 3])
+                with hc1:
+                    st.markdown(f"### {day}")
+                with hc2:
+                    st.caption(
+                        f"GH: {int(day_df['GreenHammer'].sum())} | "
+                        f"RH: {int(day_df['RedHammer'].sum())} | "
+                        f"IRH: {int(day_df['InvertedRedHammer'].sum())}"
+                    )
 
-            if st.session_state["use_lightweight"] and HAS_LWC:
-                render_lwc_day_chart(
-                    day,
-                    day_df,
-                    str(i),
-                    int(st.session_state["interval"]),
-                    bool(st.session_state["show_volume"]),
-                    float(st.session_state["price_bar_ratio"]),
-                    st,
-                )
-            else:
-                fig = make_day_figure(
-                    day,
-                    day_df,
-                    int(st.session_state["interval"]),
-                    bool(st.session_state["show_volume"]),
-                    float(st.session_state["price_bar_ratio"]),
-                )
-                st.pyplot(fig, use_container_width=False)
+                if st.session_state["use_lightweight"] and HAS_LWC:
+                    render_lwc_day_chart(
+                        day,
+                        day_df,
+                        str(i),
+                        int(st.session_state["interval"]),
+                        bool(st.session_state["show_volume"]),
+                        float(st.session_state["price_bar_ratio"]),
+                        st,
+                    )
+                else:
+                    fig = make_day_figure(
+                        day,
+                        day_df,
+                        int(st.session_state["interval"]),
+                        bool(st.session_state["show_volume"]),
+                        float(st.session_state["price_bar_ratio"]),
+                    )
+                    st.pyplot(fig, use_container_width=False)
 
         st.success(
             f"Prepared {st.session_state['pages_added']} chart page(s). "
             f"Download mode: {st.session_state['download_mode']}."
         )
 
-        st.markdown("#### Combined Data")
-        st.dataframe(st.session_state["final_df"].reset_index(), use_container_width=True)
+        with st.expander("Combined Data", expanded=False):
+            st.dataframe(st.session_state["final_df"].reset_index(), use_container_width=True)
 
 elif page == "Backtest":
     # ---------- Page 3: STR1 scan + backtest + reporting ----------
@@ -1442,9 +1628,9 @@ elif page == "Journal":
     trades_raw = st.session_state.get("journal_trades_raw", [])
     if not trades_raw:
         st.info("No trades returned for selected range.")
-        st.stop()
-
-    trades_df = pd.DataFrame(trades_raw)
+        trades_df = pd.DataFrame()
+    else:
+        trades_df = pd.DataFrame(trades_raw)
 
     journal_cols = [
         "Date", "Week", "unique ID", "BUY Time", "SELL Time", "Strike", "L/S", "STR Entry", "Trade", "Qty", "BUY", "SELL",

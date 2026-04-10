@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Trading Dashboard",
+      "runtimeExecutable": "D:\\KHAZANA\\KHAZANA\\PYTHON\\CODE1\\.venv\\Scripts\\streamlit.exe",
+      "runtimeArgs": ["run", "D:\\KHAZANA\\KHAZANA\\PYTHON\\CODE1\\indexemaUserDefined.py", "--server.port", "8501"],
+      "port": 8501
+    }
+  ]
+}
